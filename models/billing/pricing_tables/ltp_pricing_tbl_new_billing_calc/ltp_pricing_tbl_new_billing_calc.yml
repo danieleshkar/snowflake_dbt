@@ -65,3 +65,20 @@ sources:
             description: Scope of the exception. Tenant = applies to a specific sub-tenant. MSP = applies to all tenants under the MSP tree (future use).
           - name: PARENT_ID
             description: The LTP global ID that the sub-tenant belongs to (maps to ROOT in HWM). Used to scope the exception to the correct LTP.
+
+      - name: LTP_MIN_COMMIT_TBL
+        description: Monthly minimum commitment per LTP. If the daily-calculated billing for the master pool (root + all sub-tenants resolved via ltp_unified_tbl) is below this commitment while the date is within the active range, a top-up row is emitted to bring the daily total to the commitment amount. Sourced from Salesforce account_table fields (Monthly_Commitment_Amount__c, Commitment_Effective_Date__c, License_End_Date__c).
+        config:
+          grants:
+            select: ['RIVERY_ROLE']
+        columns:
+          - name: TENANT_GLOBAL_ID
+            description: The LTP root tenant ID. Commitment applies to the entire master pool resolved via ltp_unified_tbl.
+          - name: TENANT_NAME
+            description: Display name of the LTP.
+          - name: MONTHLY_COMMITMENT_AMOUNT
+            description: Monthly minimum dollar amount. If the daily total billing for the master pool is below this, a top-up adjustment is emitted to fill the gap.
+          - name: START_DATE
+            description: Date from which the commitment becomes active (inclusive).
+          - name: END_DATE
+            description: Date on which the commitment expires (inclusive).

@@ -691,17 +691,94 @@ dmarc AS (
         ON  d.date_recorded         = t.date_recorded
         AND d.master_tenant_id      = t.master_tenant_id
         AND d.dmarc_ironscales_plan = t.dmarc_ironscales_plan
+),
+
+-- ============================================================
+-- MIN COMMIT: load active monthly minimum commitments.
+-- Resolve each LTP to its master_tenant_id so the pool total
+-- is compared correctly (Pax8: US-733 + EU-25, Sherweb: US-211815 + US-303917, etc).
+-- ============================================================
+min_commit AS (
+    SELECT
+        c.TENANT_GLOBAL_ID                                          AS ltp_id,
+        COALESCE(u.master_tenant_id, c.TENANT_GLOBAL_ID)            AS master_tenant_id,
+        c.MONTHLY_COMMITMENT_AMOUNT,
+        c.START_DATE,
+        c.END_DATE
+    FROM {{ ref('ltp_min_commit_tbl') }} c
+    LEFT JOIN unified u
+        ON c.TENANT_GLOBAL_ID = u.global_tenant_id
+    WHERE CURRENT_DATE() BETWEEN c.START_DATE AND c.END_DATE
+      AND c.MONTHLY_COMMITMENT_AMOUNT > 0
+),
+
+-- ============================================================
+-- ALL CALCULATED: union all output CTEs at (date, ltp, amount) grain.
+-- ltp here is global_tenant_id (root LTP) — gets mapped to master_tenant_id
+-- in the next step so pooled tenants are summed together.
+-- ============================================================
+all_calculated AS (
+    SELECT DATE_RECORDED, ltp, amount FROM plans
+    UNION ALL
+    SELECT DATE_RECORDED, ltp, amount FROM exceptional_plans
+    UNION ALL
+    SELECT DATE_RECORDED, ltp, amount FROM premium
+    UNION ALL
+    SELECT DATE_RECORDED, ltp, amount FROM incident_mgmt
+    UNION ALL
+    SELECT DATE_RECORDED, ltp, amount FROM stbp
+    UNION ALL
+    SELECT DATE_RECORDED, ltp, amount FROM ato
+    UNION ALL
+    SELECT date_recorded, ltp, amount FROM dmarc
+),
+
+-- ============================================================
+-- MASTER TOTALS: total billing per master pool for today.
+-- Used as the comparison base for the minimum commitment check.
+-- ============================================================
+master_totals AS (
+    SELECT
+        a.DATE_RECORDED,
+        u.master_tenant_id,
+        SUM(a.amount)                                               AS total_amount
+    FROM all_calculated a
+    JOIN unified u ON a.ltp = u.global_tenant_id
+    GROUP BY a.DATE_RECORDED, u.master_tenant_id
+),
+
+-- ============================================================
+-- MIN COMMIT TOPUP: emit one row when the master pool's total
+-- billing falls below the commitment. Top-up = commitment - total.
+-- LEFT JOIN to master_totals so LTPs with zero billing today still
+-- get the full commitment as a top-up.
+-- ============================================================
+min_commit_topup AS (
+    SELECT
+        COALESCE(mt.DATE_RECORDED, CURRENT_DATE())                  AS DATE_RECORDED,
+        mc.ltp_id                                                   AS ltp,
+        'Monthly Minimum'                                           AS item,
+        'IS-LTP-MIN'                                                AS sku,
+        NULL::BOOLEAN                                               AS partner_pricing,
+        1                                                           AS quantity,
+        mc.MONTHLY_COMMITMENT_AMOUNT - COALESCE(mt.total_amount, 0) AS amount,
+        'Minimum Commitment'                                        AS price_type
+    FROM min_commit mc
+    LEFT JOIN master_totals mt
+        ON mc.master_tenant_id = mt.master_tenant_id
+    WHERE COALESCE(mt.total_amount, 0) < mc.MONTHLY_COMMITMENT_AMOUNT
 )
 
 -- ============================================================
 -- FINAL OUTPUT
--- plans        — standard tier waterfall, all tenants except exceptional sub-tenants
+-- plans            — standard tier waterfall, all tenants except exceptional sub-tenants
 -- exceptional_plans — exceptional sub-tenant seats at their specific rate
--- premium      — flat rate addons
--- incident_mgmt — tiered addon
--- stbp         — flat rate addon
--- ato          — flat rate addon
--- dmarc        — flat rate per domain
+-- premium          — flat rate addons
+-- incident_mgmt    — tiered addon
+-- stbp             — flat rate addon
+-- ato              — flat rate addon
+-- dmarc            — flat rate per domain
+-- min_commit_topup — top-up row when pool total falls below monthly commitment
 -- ============================================================
 SELECT DATE_RECORDED, ltp, item, sku, partner_pricing, quantity, amount,
        CASE WHEN price_type = 'Promo Price'       THEN 'Promo'
@@ -748,3 +825,7 @@ SELECT DATE_RECORDED, ltp, item, sku, partner_pricing, quantity, amount,
             ELSE 'Standard'
        END AS price_type
 FROM dmarc
+UNION ALL
+SELECT DATE_RECORDED, ltp, item, sku, partner_pricing, quantity, amount,
+       price_type
+FROM min_commit_topup
