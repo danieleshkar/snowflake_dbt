@@ -56,7 +56,7 @@ models:
         +schema: dbt_billing_staging_db
         +materialized: view
         +grants:
-          select: ['RIVERY_ROLE','RIVERY_ROLE_UPDATED']
+          select: ['RIVERY_ROLE','RIVERY_ROLE_UPDATED','SNOWFLAKE_FINANCE_ANALYST_ROLE']
 
       intermediate:
         +schema: dbt_billing_int_db
