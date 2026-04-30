@@ -51,6 +51,7 @@ SELECT
     g.DMARC_MANAGEMENT,
     g.dmarc_domains_number,
     g.dmarc_ironscales_plan,
+    g.dmarc_ironscales_plan_name,
     g.NOT_NFR_PARTNER
 FROM
     current_month_ltp_mb_usage_hwm r
