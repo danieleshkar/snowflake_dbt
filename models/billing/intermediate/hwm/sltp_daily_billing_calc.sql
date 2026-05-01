@@ -387,6 +387,33 @@ dmarc AS (
         AND g.dmarc_ironscales_plan IS NOT NULL
     HAVING
         (d.dmarc_domains_number > 0 AND d.dmarc_domains_number IS NOT NULL)
+),
+
+-- ============================================================
+-- MIN COMMIT PASSTHROUGH: Minimum Commitment top-up rows.
+-- Pulled directly from the LTP itemized table (already calculated
+-- there as commitment - master_pool_total). Kept at LTP-root grain
+-- (first_layer_id only) — sub-layer split would be arbitrary since
+-- Min Commit is a partner-level contractual floor, not real usage.
+-- price_type passes through verbatim ('Minimum Commitment') —
+-- intentionally NOT normalized to Standard/Promo/Exceptional.
+-- ============================================================
+min_commit_passthrough AS (
+    SELECT
+        i.billing_date,
+        i.ltp                                                                   AS first_layer_id,
+        NULL::text                                                              AS second_layer_id,
+        NULL::text                                                              AS third_layer_id,
+        NULL::text                                                              AS fourth_layer_id,
+        NULL::text                                                              AS fifth_layer_id,
+        i.item,
+        i.sku,
+        i.partner_pricing,
+        i.quantity                                                              AS billable_quantity,
+        i.amount,
+        i.price_type
+    FROM itemized i
+    WHERE i.price_type = 'Minimum Commitment'
 )
 
 -- ============================================================
@@ -405,3 +432,5 @@ UNION ALL
 SELECT billing_date, first_layer_id, second_layer_id, third_layer_id, fourth_layer_id, fifth_layer_id, item, sku, partner_pricing, billable_quantity, amount, price_type FROM ato
 UNION ALL
 SELECT billing_date, first_layer_id, second_layer_id, third_layer_id, fourth_layer_id, fifth_layer_id, item, sku, partner_pricing, billable_quantity, amount, price_type FROM dmarc
+UNION ALL
+SELECT billing_date, first_layer_id, second_layer_id, third_layer_id, fourth_layer_id, fifth_layer_id, item, sku, partner_pricing, billable_quantity, amount, price_type FROM min_commit_passthrough
