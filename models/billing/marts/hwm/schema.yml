@@ -2,6 +2,9 @@ version: 2
 
 models:
   - name: ltp_daily_itemized_new_billing_tbl
+    config:
+      grants:
+        select+: ['CLAUDE_PILOT_ROLE']
     description: >
       Daily itemized billing amounts per Low Touch Partner (LTP) using the updated
       billing calculation. One row per billing_date + ltp + item + sku +
