@@ -4,7 +4,7 @@ models:
   - name: global_tenant_history
     config:
       grants:
-        select+: ['CLAUDE_PILOT_ROLE']
+        +select: ['CLAUDE_PILOT_ROLE']
     description: >
       Daily snapshot of all IRONSCALES tenants across all regions (US, EU, UAE, Canada).
       One row per tenant per day — use record_date = current_date to get the current
