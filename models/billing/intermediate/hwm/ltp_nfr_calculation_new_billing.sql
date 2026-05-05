@@ -12,8 +12,20 @@ ltp_daily_itemized as (
 
 conversion_tbl_sf as (
     select * from {{ ref('stg_salesforce_conversion_rate_table')}} 
-)
-,
+),
+
+-- NEW: total billing per LTP-day across ALL items (not just NFR rows).
+-- Used by the activity check below: MSPs paying via Min Commit, plans, premium,
+-- IM, ATO, S&T, DMARC, etc. now correctly qualify as "active" for the
+-- first-100-NFR-seats-free benefit. Per finance: any organic charge counts.
+ltp_total_billing as (
+    select
+        ltp,
+        date_recorded,
+        sum(amount) as ltp_total_amount
+    from ltp_daily_itemized
+    group by ltp, date_recorded
+),
 
 tenant_details as (
                     select
@@ -64,7 +76,7 @@ td.total_emails,
 CASE 
     WHEN td.total_customers > 1 
          OR td.total_emails > 100 
-         OR l.amount > 0
+         OR coalesce(tb.ltp_total_amount, 0) > 0   -- FIXED: was `OR l.amount > 0`. Now checks the LTP's TOTAL billing across all items rather than the NFR row alone (which is $0 by design). See QA note in this file's PR.
     THEN CASE 
              WHEN l.quantity > 100 THEN l.quantity - 100 
              ELSE 0 
@@ -81,6 +93,7 @@ from meta p
 left join ltp_daily_itemized l on p.tenant_global_id = l.ltp and p.snapshot_date = l.date_recorded
 left join tenant_details td on p.tenant_global_id = td.ltp
 left join conversion_tbl c on p.currency = c.isocode and l.date_recorded = dateadd(day, 1, date(c.startdate))
+left join ltp_total_billing tb on p.tenant_global_id = tb.ltp and p.snapshot_date = tb.date_recorded   -- NEW: join to LTP-wide totals (one row per ltp/date)
 
 where
 snapshot_date = current_date
