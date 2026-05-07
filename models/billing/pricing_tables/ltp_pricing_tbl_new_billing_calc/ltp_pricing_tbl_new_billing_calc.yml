@@ -1,4 +1,5 @@
 version: 2
+
 sources:
   - name: ltp_pricing_table_new_billing_calc
     description: pricing and info about LTPs
@@ -82,3 +83,125 @@ sources:
             description: Date from which the commitment becomes active (inclusive).
           - name: END_DATE
             description: Date on which the commitment expires (inclusive).
+
+models:
+  - name: ltp_account_meta
+    config:
+      grants:
+        +select: ['CLAUDE_PILOT_ROLE']
+    description: >
+      Reference table mapping each Low Touch Partner (LTP) to its billing-relevant
+      attributes: partner type (MSP Direct / Distributor / OEM), currency, CSM
+      ownership, profile mode, and Salesforce account linkage.
+
+      One row per LTP. Current-state only — contains a single snapshot
+      (snapshot_date = current_date) because the model filters
+      WHERE snapshot_date = current_date AND is_tracked = TRUE. Do not attempt
+      time-series analysis with this table alone; for historical changes use
+      global_tenant_history with date filters.
+
+      This is the canonical source for ltp_type. Use this table whenever a
+      question involves channel attribution (Direct MSP vs Disti),
+      regional/currency breakdowns, or CSM-owner lookups. Distribution is
+      approximately: 92% msp, 7% disti, 1% oem.
+
+      Join patterns:
+        - To global_tenant_history: ltp_account_meta.tenant_global_id =
+          global_tenant_history.tenant_global_id (98% match coverage; ~8 rows
+          in this table have no current-day GTH match — usually new LTPs)
+        - To ltp_daily_itemized_new_billing_tbl: ltp_account_meta.tenant_global_id =
+          ltp_daily_itemized_new_billing_tbl.ltp (joins to root LTP only, depth=0)
+
+      For tenant-level questions — counts, billing status, active profile counts —
+      always use global_tenant_history. This table is purely the LTP-level
+      reference layer.
+
+    columns:
+      - name: snapshot_date
+        description: >
+          Date of the latest dbt build. Always equal to current_date because
+          the model overwrites daily. Do not use this for historical analysis —
+          there is only ever one date present at a time.
+
+      - name: tenant_global_id
+        description: >
+          IRONSCALES global identifier of the LTP tenant (root tenant, depth=0).
+          Format is region-prefixed: 'US-' for US, 'EU-' for Europe, 'CA-' for
+          Canada, 'AE-' for UAE. Primary join key to global_tenant_history.
+
+      - name: tenant_name
+        description: >
+          Display name of the LTP organization (e.g., "Pax8", "Verdica Technologies").
+
+      - name: registration_date
+        description: >
+          Date the LTP first registered in IRONSCALES. May be null for legacy
+          LTPs predating registration tracking. Used in NFR billing logic — NFR
+          seats are only billed for MSPs registered 90+ days ago.
+
+      - name: active_date
+        description: >
+          Date the LTP became actively billable. Typically a few days after
+          registration_date. Null for LTPs that have not yet activated.
+
+      - name: created_on
+        description: >
+          Date the LTP record was created in the source system. May differ from
+          registration_date for migrated/legacy records.
+
+      - name: csm_owner_updated
+        description: >
+          Internal IRONSCALES Customer Success Manager assigned to the LTP.
+          Free-text field; may be empty for unassigned LTPs.
+
+      - name: account_master_id
+        description: >
+          IRONSCALES internal billing-system identifier for the master account.
+
+      - name: is_tracked
+        description: >
+          Flag indicating whether the LTP is included in tracked billing reporting.
+          Always true in this table — the model pre-filters to tracked LTPs only.
+          Filtering on is_tracked = true is a no-op.
+
+      - name: is_highwatermark
+        description: >
+          Whether this LTP uses the high-watermark billing model (charged for
+          peak active seat count during the billing period) versus point-in-time
+          billing. Approximately 93% of LTPs use high-watermark.
+
+      - name: sfdc_id
+        description: >
+          Salesforce account ID (15- or 18-character SFDC identifier). Use this
+          to link to upstream Salesforce data.
+
+      - name: last_updated
+        description: >
+          Date the source record was most recently modified upstream.
+
+      - name: currency
+        description: >
+          Billing currency for the LTP. Enum: USD, EUR, GBP, CAD. Drives currency
+          conversion in any cross-LTP revenue aggregation — never sum amount
+          across LTPs without first converting to a common currency or filtering
+          to a single currency.
+
+      - name: profile_type
+        description: >
+          LTP's seat-counting mode for billing. Enum:
+          'active' = billing counts active_profiles only (raw active mailbox
+          count, no deduction);
+          'shared' = billing counts active_profiles - shared_profiles
+          (subtracts shared mailboxes like support@, info@ from the billable
+          count). The 'shared' mode is the standard for most MSPs because
+          shared mailboxes are not individually billed.
+
+      - name: ltp_type
+        description: >
+          Billing channel classification — the most important column in this table.
+          Enum: 'msp' = MSP Direct (IRONSCALES bills the MSP directly, ~92% of LTPs);
+          'disti' = Distributor (IRONSCALES bills a distributor like Pax8 who in turn
+          bills the MSP, ~7% of LTPs); 'oem' = OEM partner (special bundled
+          arrangement, ~1% of LTPs). For "MSP Direct vs Distributor revenue"
+          analysis, group by this field. Pax8 alone accounts for the majority
+          of disti revenue.
